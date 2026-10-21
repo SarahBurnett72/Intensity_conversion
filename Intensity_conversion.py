@@ -232,7 +232,7 @@ if submitted:
                 results[k] for k in results
                 ],
             })
-            st.dataframe(df, hide_index=True, use_container_width=True)
+        st.dataframe(df, hide_index=True, use_container_width=True)
 
     except ValueError as error:
         st.error(str(error))
