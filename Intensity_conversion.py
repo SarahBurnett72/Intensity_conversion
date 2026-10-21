@@ -1,16 +1,11 @@
 
 import math
 
-print("DEBUG 1: Script started", flush=True)
 
 import streamlit as st
-print("DEBUG 2: Streamlit imported", flush=True)
-
 import pandas as pd
-print("DEBUG 3: Pandas imported", flush=True)
-
 import numpy as np
-print("DEBUG 3: Numpy imported", flush=True)
+
 
 # --------------------------------------------------
 # Constants
@@ -215,13 +210,13 @@ if submitted:
         st.subheader("Conversion results")
 
         # Display the equivalent in all four units.
-        for unit, result in results.items():
-            if result is None:
-                formatted = "Not available"
-            else:
-                formatted = f"{result:.8g}"
+        #for unit, result in results.items():
+            #if result is None:
+                #formatted = "Not available"
+            #else:
+                #formatted = f"{result:.8g}"
 
-            st.metric(unit, formatted)
+            #st.metric(unit, formatted)
 
         st.caption(
             f"Wavelength: {wavelength_nm:g} nm | "
@@ -230,11 +225,11 @@ if submitted:
             f"Solid angle: {solid_angle_sr:g} sr"
         )
 
-        with st.expander("View results as a table"):
-            df = pd.DataFrame({
-                "Unit": list(results.keys()),
-                "Equivalent value": [
-                    results[k] for k in results
+        
+        df = pd.DataFrame({
+            "Unit": list(results.keys()),
+            "Equivalent value": [
+                results[k] for k in results
                 ],
             })
             st.dataframe(df, hide_index=True, use_container_width=True)
