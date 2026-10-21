@@ -172,114 +172,115 @@ st.info(
     "Select one input unit and one or more output units. "
 )
 
-with st.form("conversion_form"):
-    input_unit = st.selectbox("Convert from", UNITS)
+# Keep selectors outside the form so changes apply immediately.
+input_unit = st.selectbox(
+    "Convert from",
+    UNITS,
+    key="input_unit",
+)
 
-    output_units = st.multiselect(
-        "Convert to",
-        [u for u in UNITS if u != input_unit],
-        default=[u for u in UNITS if u != input_unit],
+output_units = st.multiselect(
+    "Convert to",
+    [u for u in UNITS if u != input_unit],
+    default=[u for u in UNITS if u != input_unit],
+    key="output_units",
+)
+
+# Determine which additional inputs are required.
+needs_photon = (
+    input_unit == "μmol m⁻² s⁻¹"
+    or "μmol m⁻² s⁻¹" in output_units
+)
+
+needs_candela = (
+    input_unit == "cd"
+    or "cd" in output_units
+)
+
+needs_wavelength = needs_photon or needs_candela
+
+# Display only the fields required for the selected conversions.
+value = st.number_input(
+    f"Input value ({input_unit})",
+    min_value=0.0,
+    value=1.0,
+    format="%.8g",
+    key="input_value",
+)
+
+if needs_wavelength:
+    wavelength_nm = st.number_input(
+        "Wavelength (nm)",
+        min_value=380.0,
+        max_value=780.0,
+        value=555.0,
+        step=1.0,
+        help="The photopic model supports 380–780 nm.",
+        key="wavelength_nm",
     )
+else:
+    wavelength_nm = None
 
-    value = st.number_input(
-        f"Input value ({input_unit})",
-        min_value=0.0,
+if needs_photon:
+    area_m2 = st.number_input(
+        "Illuminated area (m²)",
+        min_value=0.000001,
         value=1.0,
         format="%.8g",
+        help="Required for photon flux density conversions.",
+        key="area_m2",
     )
+else:
+    area_m2 = None
 
-    needs_photon = (
-        input_unit == "μmol m⁻² s⁻¹"
-        or "μmol m⁻² s⁻¹" in output_units
+if needs_candela:
+    solid_angle_sr = st.number_input(
+        "Emission solid angle (sr)",
+        min_value=0.000001,
+        max_value=12.566371,
+        value=1.0,
+        format="%.6f",
+        help="A full sphere is approximately 4π sr.",
+        key="solid_angle_sr",
     )
-    needs_candela = input_unit == "cd" or "cd" in output_units
+else:
+    solid_angle_sr = None
 
-    # Wavelength is required for photon and candela conversions.
-    needs_wavelength = needs_photon or needs_candela
-
-    if needs_wavelength:
-        wavelength_nm = st.number_input(
-            "Wavelength (nm)",
-            min_value=380.0,
-            max_value=780.0,
-            value=555.0,
-            step=1.0,
-            help="The photopic model supports 380–780 nm.",
+# Convert on demand, using the current selections and values.
+if not output_units:
+    st.info("Select at least one output unit.")
+else:
+    try:
+        results = calculate_conversions(
+            value=value,
+            input_unit=input_unit,
+            output_units=output_units,
+            wavelength_nm=wavelength_nm,
+            area_m2=area_m2,
+            solid_angle_sr=solid_angle_sr,
         )
-    else:
-        wavelength_nm = None
 
-    if needs_photon:
-        area_m2 = st.number_input(
-            "Illuminated area (m²)",
-            min_value=0.000001,
-            value=1.0,
-            format="%.8g",
-            help="Required to convert total photon rate and photon flux density.",
-        )
-    else:
-        area_m2 = None
+        st.subheader("Conversion results")
 
-    if needs_candela:
-        solid_angle_sr = st.number_input(
-            "Emission solid angle (sr)",
-            min_value=0.000001,
-            max_value=12.566371,
-            value=1.0,
-            format="%.6f",
-            help="Effective emission solid angle; a full sphere is approximately 4π sr.",
-        )
-    else:
-        solid_angle_sr = None
-
-    submitted = st.form_submit_button(
-        "Convert",
-        type="primary",
-        use_container_width=True,
-    )
-
-if submitted:
-    if not output_units:
-        st.warning("Select at least one output unit.")
-    else:
-        try:
-            results = calculate_conversions(
-                value=value,
-                input_unit=input_unit,
-                output_units=output_units,
-                wavelength_nm=wavelength_nm,
-                area_m2=area_m2,
-                solid_angle_sr=solid_angle_sr,
+        for unit, result in results.items():
+            st.metric(
+                label=unit,
+                value=f"{result:.8g}",
             )
 
-            st.subheader("Conversion results")
+        if needs_wavelength:
+            caption = f"Wavelength: {wavelength_nm:g} nm"
 
-            df = pd.DataFrame({
-                "Output unit": list(results.keys()),
-                "Converted value": [
-                    f"{result:.8g}"
-                    for result in results.values()
-                ],
-            })
-
-            st.dataframe(
-                df,
-                hide_index=True,
-                use_container_width=True,
-            )
-
-            if needs_wavelength:
-                st.caption(
-                    f"Wavelength: {wavelength_nm:g} nm"
-                    + (
-                        f" | V(λ): "
-                        f"{photopic_efficiency(wavelength_nm):.6g}"
-                        if needs_candela else ""
-                    )
+            if needs_candela:
+                caption += (
+                    f" | V(λ): "
+                    f"{photopic_efficiency(wavelength_nm):.6g}"
                 )
 
-        except ValueError as error:
-            st.error(str(error))
+            st.caption(caption)
+
+    except ValueError as error:
+        st.error(str(error))
 
 st.divider()
 
