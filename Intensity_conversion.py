@@ -262,11 +262,21 @@ else:
 
         st.subheader("Conversion results")
 
-        for unit, result in results.items():
-            st.metric(
-                label=unit,
-                value=f"{result:.8g}",
-            )
+        df = pd.DataFrame({
+            "Output unit": list(results.keys()),
+            "Converted value": [
+                f"{result:.8g}"
+                if result is not None
+                else "Not available"
+                for result in results.values()
+            ],
+        })
+
+        st.dataframe(
+            df,
+            hide_index=True,
+            use_container_width=True,
+        )
 
         if needs_wavelength:
             caption = f"Wavelength: {wavelength_nm:g} nm"
