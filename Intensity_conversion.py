@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -21,7 +20,8 @@ UNITS = [
     "μmol m⁻² s⁻¹",
     "W",
     "mW",
-    "cd",
+    "lm",
+    "mcd",
 ]
 
 # Approximate CIE 1931 photopic luminous efficiency V(lambda).
@@ -45,13 +45,12 @@ CIE_VALUES = {
 
 def photopic_efficiency(wavelength_nm):
     """Interpolate the approximate CIE V(lambda) table."""
+
     wavelengths = np.array(list(CIE_VALUES.keys()), dtype=float)
     efficiencies = np.array(list(CIE_VALUES.values()), dtype=float)
 
     if not 380 <= wavelength_nm <= 780:
-        raise ValueError(
-            "Supported wavelengths are 380–780 nm."
-        )
+        raise ValueError("Supported wavelengths are 380–780 nm.")
 
     return float(np.interp(
         wavelength_nm, wavelengths, efficiencies
@@ -63,18 +62,29 @@ def calculate_conversions(
     input_unit,
     output_units,
     wavelength_nm=None,
-    area_m2=None,
-    solid_angle_sr=None,
+    radius_m=None,
+    theta_half_deg=None,
 ):
-    """Convert between photon flux density, W, mW and cd."""
+    """
+    Convert between photon flux density, W, mW, lm and mcd.
+
+    Assumes uniform luminous intensity within a circular emission cone.
+    """
 
     if value < 0:
         raise ValueError("Input value must be non-negative.")
 
-    # Wavelength is only needed for photon or candela conversions.
+    # Determine whether wavelength is required.
+    photometric_units = ("lm", "mcd")
+    photon_unit = "μmol m⁻² s⁻¹"
+
     needs_wavelength = (
-        input_unit in ("μmol m⁻² s⁻¹", "cd")
-        or any(u in ("μmol m⁻² s⁻¹", "cd") for u in output_units)
+        input_unit == photon_unit
+        or input_unit in photometric_units
+        or any(
+            u == photon_unit or u in photometric_units
+            for u in output_units
+        )
     )
 
     if needs_wavelength and wavelength_nm is None:
@@ -83,44 +93,82 @@ def calculate_conversions(
     if wavelength_nm is not None and not 380 <= wavelength_nm <= 780:
         raise ValueError("Supported wavelengths are 380–780 nm.")
 
+    # Radius is only required for photon flux density.
     needs_area = (
-        input_unit == "μmol m⁻² s⁻¹"
-        or "μmol m⁻² s⁻¹" in output_units
+        input_unit == photon_unit
+        or photon_unit in output_units
     )
 
-    if needs_area and (area_m2 is None or area_m2 <= 0):
-        raise ValueError("Area must be greater than zero.")
+    if needs_area and (radius_m is None or radius_m <= 0):
+        raise ValueError("Radius must be greater than zero.")
 
-    needs_solid_angle = (
-        input_unit == "cd" or "cd" in output_units
+    # Half viewing angle is required for lm/mcd conversions.
+    needs_angle = (
+        input_unit == "mcd"
+        or "mcd" in output_units
+        or input_unit == "lm"
+        or "lm" in output_units
     )
 
-    if needs_solid_angle and (
-        solid_angle_sr is None or solid_angle_sr <= 0
-    ):
-        raise ValueError("Solid angle must be greater than zero.")
+    if needs_angle and theta_half_deg is None:
+        raise ValueError("Half viewing angle is required.")
 
+    if needs_angle and not 0 < theta_half_deg <= 180:
+        raise ValueError(
+            "Half viewing angle must be greater than 0 and at most 180 degrees."
+        )
+
+    # Calculate illuminated area.
+    if needs_area:
+        area_m2 = np.pi * radius_m**2
+    else:
+        area_m2 = None
+
+    # Calculate emission solid angle from half viewing angle.
+    if needs_angle:
+        theta_rad = np.radians(theta_half_deg)
+
+        solid_angle_sr = (
+            2 * np.pi * (1 - np.cos(theta_rad))
+        )
+    else:
+        solid_angle_sr = None
+
+    # Photopic luminous efficiency.
+    if needs_wavelength:
+        v_lambda = photopic_efficiency(wavelength_nm)
+    else:
+        v_lambda = None
+
+    # --------------------------------------------------
     # Convert input to radiant power (W).
+    # --------------------------------------------------
+
     if input_unit == "W":
         power_w = value
 
     elif input_unit == "mW":
         power_w = value / 1000.0
 
-    elif input_unit == "cd":
-        v_lambda = photopic_efficiency(wavelength_nm)
-        if v_lambda <= 0:
-            raise ValueError("Photopic efficiency must be positive.")
+    elif input_unit == "lm":
+        power_w = value / (K_M * v_lambda)
 
-        power_w = (
-            value * solid_angle_sr / (K_M * v_lambda)
+    elif input_unit == "mcd":
+        intensity_cd = value / 1000.0
+
+        luminous_flux_lm = (
+            intensity_cd * solid_angle_sr
         )
 
-    elif input_unit == "μmol m⁻² s⁻¹":
+        power_w = luminous_flux_lm / (K_M * v_lambda)
+
+    elif input_unit == photon_unit:
         energy_per_photon = (
             H * C / (wavelength_nm * 1e-9)
         )
+
         photon_rate_mol_s = value * area_m2
+
         power_w = (
             photon_rate_mol_s * 1e-6
             * NA * energy_per_photon
@@ -129,50 +177,69 @@ def calculate_conversions(
     else:
         raise ValueError("Unsupported input unit.")
 
+    # --------------------------------------------------
+    # Convert radiant power (W) to requested units.
+    # --------------------------------------------------
+
     results = {}
-    energy_per_photon = (
-        H * C / (wavelength_nm * 1e-9)
-        if needs_wavelength else None
-    )
+
+    if needs_wavelength:
+        energy_per_photon = (
+            H * C / (wavelength_nm * 1e-9)
+        )
 
     for unit in output_units:
+
         if unit == "W":
             results[unit] = power_w
 
         elif unit == "mW":
             results[unit] = power_w * 1000.0
 
-        elif unit == "cd":
-            v_lambda = photopic_efficiency(wavelength_nm)
+        elif unit == "lm":
             results[unit] = (
-                K_M * v_lambda * power_w / solid_angle_sr
+                K_M * v_lambda * power_w
             )
 
-        elif unit == "μmol m⁻² s⁻¹":
+        elif unit == "mcd":
+            luminous_flux_lm = (
+                K_M * v_lambda * power_w
+            )
+
+            intensity_cd = (
+                luminous_flux_lm / solid_angle_sr
+            )
+
+            results[unit] = intensity_cd * 1000.0
+
+        elif unit == photon_unit:
             photon_rate_mol_s = (
                 power_w / energy_per_photon / NA
             )
+
             results[unit] = (
                 photon_rate_mol_s * 1e6 / area_m2
             )
 
     return results
 
+
 # --------------------------------------------------
 # User interface
 # --------------------------------------------------
+
 st.title("💡 Optical Unit Converter")
 
 st.write(
-    "Convert photon flux density (PAR), radiant power, and "
-    "luminous intensity for monochromatic light."
+    "Convert photon flux density (PAR), radiant power, "
+    "luminous flux and luminous intensity for monochromatic light."
 )
 
 st.info(
-    "Select one input unit and one or more output units. "
+    "Select one input unit and one or more output units."
 )
 
-# Keep selectors outside the form so changes apply immediately.
+# Input and output unit selectors.
 input_unit = st.selectbox(
     "Convert from",
     UNITS,
@@ -192,14 +259,19 @@ needs_photon = (
     or "μmol m⁻² s⁻¹" in output_units
 )
 
-needs_candela = (
-    input_unit == "cd"
-    or "cd" in output_units
+needs_photometric = (
+    input_unit in ("lm", "mcd")
+    or any(u in ("lm", "mcd") for u in output_units)
 )
 
-needs_wavelength = needs_photon or needs_candela
+needs_wavelength = needs_photon or needs_photometric
 
-# Display only the fields required for the selected conversions.
+needs_angle = (
+    input_unit in ("lm", "mcd")
+    or any(u in ("lm", "mcd") for u in output_units)
+)
+
+# Input value.
 value = st.number_input(
     f"Input value ({input_unit})",
     min_value=0.0,
@@ -208,6 +280,7 @@ value = st.number_input(
     key="input_value",
 )
 
+# Wavelength.
 if needs_wavelength:
     wavelength_nm = st.number_input(
         "Wavelength (nm)",
@@ -221,43 +294,55 @@ if needs_wavelength:
 else:
     wavelength_nm = None
 
+# Radius.
 if needs_photon:
-    area_m2 = st.number_input(
-        "Illuminated area (m²)",
+    radius_m = st.number_input(
+        "Radius of illuminated area (m)",
         min_value=0.000001,
         value=1.0,
         format="%.8g",
         help="Required for photon flux density conversions.",
-        key="area_m2",
+        key="radius_m",
     )
 else:
-    area_m2 = None
+    radius_m = None
 
-if needs_candela:
-    solid_angle_sr = st.number_input(
-        "Emission solid angle (sr)",
-        min_value=0.000001,
-        max_value=12.566371,
-        value=1.0,
-        format="%.6f",
-        help="A full sphere is approximately 4π sr.",
-        key="solid_angle_sr",
+# Half viewing angle.
+if needs_angle:
+    theta_half_deg = st.number_input(
+        "Half viewing angle θ₁/₂ (degrees)",
+        min_value=0.001,
+        max_value=180.0,
+        value=30.0,
+        step=1.0,
+        help=(
+            "Angle measured from the optical axis to the edge "
+            "of the emission cone."
+        ),
+        key="theta_half_deg",
     )
 else:
-    solid_angle_sr = None
+    theta_half_deg = None
 
-# Convert on demand, using the current selections and values.
+# --------------------------------------------------
+# Conversion results
+# --------------------------------------------------
+
 if not output_units:
+
     st.info("Select at least one output unit.")
+
 else:
+
     try:
+
         results = calculate_conversions(
             value=value,
             input_unit=input_unit,
             output_units=output_units,
             wavelength_nm=wavelength_nm,
-            area_m2=area_m2,
-            solid_angle_sr=solid_angle_sr,
+            radius_m=radius_m,
+            theta_half_deg=theta_half_deg,
         )
 
         st.subheader("Conversion results")
@@ -266,8 +351,6 @@ else:
             "Output unit": list(results.keys()),
             "Converted value": [
                 f"{result:.8g}"
-                if result is not None
-                else "Not available"
                 for result in results.values()
             ],
         })
@@ -278,25 +361,40 @@ else:
             use_container_width=True,
         )
 
+        # Display calculation parameters.
         if needs_wavelength:
-            caption = f"Wavelength: {wavelength_nm:g} nm"
-
-            if needs_candela:
-                caption += (
-                    f" | V(λ): "
-                    f"{photopic_efficiency(wavelength_nm):.6g}"
-                )
+            caption = (
+                f"Wavelength: {wavelength_nm:g} nm"
+                f" | V(λ): {photopic_efficiency(wavelength_nm):.6g}"
+            )
 
             st.caption(caption)
+
+        if needs_angle:
+            omega = (
+                2 * np.pi *
+                (1 - np.cos(np.radians(theta_half_deg)))
+            )
+
+            st.caption(
+                f"Half viewing angle: {theta_half_deg:g}°"
+                f" | Solid angle: {omega:.6g} sr"
+            )
 
     except ValueError as error:
         st.error(str(error))
 
+
+# --------------------------------------------------
+# Notes
+# --------------------------------------------------
+
 st.divider()
 
 st.caption(
-    "Note: Candela is a photometric quantity. Its conversion "
-    "depends on wavelength, the photopic response model, "
-    "and the assumed emission solid angle. Photon flux density "
-    "is expressed in µmol/s/m²."
+    "Note: Photometric conversions depend on wavelength and "
+    "the CIE 1931 photopic response. Luminous intensity and "
+    "luminous flux conversions assume uniform intensity "
+    "within a circular emission cone. Photon flux density "
+    "is expressed in µmol m⁻² s⁻¹."
 )
